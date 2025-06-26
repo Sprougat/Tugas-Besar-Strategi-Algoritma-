@@ -1,4 +1,4 @@
-  # <h1 align="center">Laporan Tugas Besar - ANALISIS KOMPLEKSITAS ALGORITMA</h1>
+  # <h1 align="center">Laporan Tugas Besar - STRATEGI ALGORITMA</h1>
 <p align="center">Rafaldo Al Maqdis - 2311102099</p>
 <p align="center">Muhammad Nasrullah - 2311102044</p>
 
