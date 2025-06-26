@@ -6,6 +6,8 @@
 ## Study Case
 ```python
 !pip install --upgrade geopandas osmnx xgboost shapely matplotlib seaborn scikit-learn imbalanced-learn > /dev/null
+```
+```python
 import os
 import pickle
 import time
@@ -29,9 +31,195 @@ from xgboost import XGBClassifier
 from imblearn.over_sampling import SMOTE
 from sklearn.model_selection import cross_val_score
 ```
+```python
+warnings.filterwarnings('ignore')
+ox.settings.log_console = False
+plt.style.use('ggplot')
+sns.set_palette("Set2")
+pd.set_option('display.precision', 2)
+```
+```python
+ox.settings.use_cache = True
+ox.settings.overpass_endpoint = "https://overpass.kumi.systems/api/interpreter"
+ox.settings.timeout = 300
+```
+```python
+KECAMATAN_TERPILIH = 
+[    "Semarang Tengah",
+    "Semarang Timur",
+    "Semarang Barat"]
+def buat_grid(batas: gpd.GeoDataFrame, ukuran_grid: int = 200) -> gpd.GeoDataFrame:
+    """
+    Membuat grid polygon dalam area batas administratif
 
+    Parameters:
+        batas (gpd.GeoDataFrame): Batas wilayah kecamatan
+        ukuran_grid (int): Ukuran grid dalam meter (default: 200m)
+
+    Returns:
+        gpd.GeoDataFrame: Grid yang sudah dipotong dengan batas wilayah
+    """
+    batas_proj = batas.to_crs(epsg=3857)
+    minx, miny, maxx, maxy = batas_proj.total_bounds
+    sel_grid = [
+        box(x0, y0, x0 + ukuran_grid, y0 + ukuran_grid)
+        for x0 in range(int(minx), int(maxx), ukuran_grid)
+        for y0 in range(int(miny), int(maxy), ukuran_grid)
+    ]
+    grid = gpd.GeoDataFrame({'geometry': sel_grid}, crs=batas_proj.crs)
+    return gpd.overlay(grid, batas_proj, how='intersection').to_crs(batas.crs)
+```
+```python
+def bersihkan_fitur_dalam_batas(gdf: gpd.GeoDataFrame, batas: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Memotong fitur geografis sesuai batas wilayah
+
+    Parameters:
+        gdf (gpd.GeoDataFrame): Fitur geografis (jalan, bangunan, dll)
+        batas (gpd.GeoDataFrame): Batas wilayah kecamatan
+
+    Returns:
+        gpd.GeoDataFrame: Fitur yang sudah dipotong dan dibersihkan
+    """
+    mask = batas.geometry.union_all()
+    return gdf.clip(mask).explode(ignore_index=True)
+def dapatkan_data_osm(kecamatan: str) -> tuple:
+    """
+    Mengambil data OSM dan menyimpan cache
+
+    Parameters:
+        kecamatan (str): Nama kecamatan lengkap dengan wilayah administrasi
+
+    Returns:
+        tuple: (batas, jalan, bangunan, area_hijau)
+    """
+    folder_cache = "cached_osm"
+    nama_file = kecamatan.split(",")[0].replace(" ", "_").lower()
+    path_file = os.path.join(folder_cache, f"{nama_file}_osm.pkl")
+
+    if os.path.exists(path_file):
+        with open(path_file, "rb") as f:
+            print(f"[INFO] Menggunakan data cache untuk {kecamatan}")
+            return pickle.load(f)
+
+    print(f"[PROSES] Mengambil data OSM: {kecamatan}")
+    try:
+        batas = ox.geocode_to_gdf(kecamatan)
+
+        batas_buffered = batas.to_crs(epsg=3857).buffer(500).to_crs(batas.crs)
+
+        graph_jalan = ox.graph_from_polygon(batas_buffered.geometry.iloc[0], network_type='drive')
+        jalan = ox.graph_to_gdfs(graph_jalan, nodes=False, edges=True)
+
+        bangunan = ox.features_from_place(kecamatan, tags={'building': True})
+
+        tag_hijau = {
+            'leisure': ['park', 'garden'],
+            'landuse': ['grass', 'forest', 'farmland', 'meadow', 'orchard', 'cemetery'],
+            'natural': ['wood', 'scrub', 'wetland', 'heath']
+        }
+        area_hijau = ox.features_from_polygon(batas.geometry.iloc[0], tag_hijau)
+
+        jalan_bersih = bersihkan_fitur_dalam_batas(jalan, batas)
+        bangunan_bersih = bersihkan_fitur_dalam_batas(bangunan, batas)
+        hijau_bersih = bersihkan_fitur_dalam_batas(area_hijau, batas)
+
+        os.makedirs(folder_cache, exist_ok=True)
+        with open(path_file, "wb") as f:
+            pickle.dump((batas, jalan_bersih, bangunan_bersih, hijau_bersih), f)
+
+        return batas, jalan_bersih, bangunan_bersih, hijau_bersih
+
+    except Exception as e:
+        print(f"[WARNING] Coba alternatif query untuk {kecamatan}")
+        try:
+            nama_sederhana = kecamatan.split(",")[0].strip()
+            batas = ox.geocode_to_gdf(f"{nama_sederhana}, Indonesia")
+
+            return batas, jalan_bersih, bangunan_bersih, hijau_bersih
+        except:
+            print(f"[ERROR] Tetap gagal, skip kecamatan {kecamatan}")
+            return None, None, None, None
+def ekstrak_fitur_per_grid(grid: gpd.GeoDataFrame, jalan: gpd.GeoDataFrame, bangunan: gpd.GeoDataFrame, hijau: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Ekstraksi fitur untuk setiap grid
+
+    Parameters:
+        grid (gpd.GeoDataFrame): Grid wilayah
+        jalan (gpd.GeoDataFrame): Data jalan
+        bangunan (gpd.GeoDataFrame): Data bangunan
+        hijau (gpd.GeoDataFrame): Data area hijau
+
+    Returns:
+        gpd.GeoDataFrame: DataFrame dengan fitur yang diekstrak
+    """
+    jalan = jalan.to_crs(epsg=3857)
+    bangunan = bangunan.to_crs(epsg=3857)
+    hijau = hijau.to_crs(epsg=3857)
+    grid = grid.to_crs(epsg=3857)
+
+    fitur = []
+    for idx, sel in grid.iterrows():
+        luas_km2 = sel.geometry.area / 1e6
+        if luas_km2 < 0.001:
+            continue
+
+        jalan_dalam = jalan[jalan.intersects(sel.geometry)]
+        panjang_jalan_km = jalan_dalam.geometry.length.sum() / 1000
+
+        bangunan_dalam = bangunan[bangunan.intersects(sel.geometry)]
+        jumlah_bangunan = len(bangunan_dalam)
+
+        hijau_dalam = hijau[hijau.intersects(sel.geometry)]
+        luas_hijau_km2 = hijau_dalam.geometry.area.sum() / 1e6
+
+        fitur.append({
+            'grid_id': idx,
+            'luas_km2': luas_km2,
+            'panjang_jalan_km': panjang_jalan_km,
+            'jumlah_bangunan': jumlah_bangunan,
+            'hijau_km2': luas_hijau_km2,
+            'kepadatan_jalan': panjang_jalan_km / luas_km2,
+            'kepadatan_bangunan': jumlah_bangunan / luas_km2,
+            'persentase_hijau': (luas_hijau_km2 / luas_km2) * 100,
+            'geometry': sel.geometry
+        })
+
+    return gpd.GeoDataFrame(fitur, crs=grid.crs).to_crs(epsg=4326)
+```
+```python
+semua_grid = []
+for kec in KECAMATAN_TERPILIH:
+    try:
+        print(f"\n[PROSES] Memproses kecamatan: {kec.split(',')[0]}")
+
+        batas, jalan, bangunan, hijau = dapatkan_data_osm(kec)
+
+        grid = buat_grid(batas, ukuran_grid=100)
+
+        fig, ax = plt.subplots(figsize=(10, 10))
+        hijau.plot(ax=ax, color="green", alpha=0.4, label="Area Hijau")
+        bangunan.plot(ax=ax, color="blue", alpha=0.5, label="Bangunan")
+        jalan.plot(ax=ax, color="gray", linewidth=1, label="Jalan")
+        grid.boundary.plot(ax=ax, color="black", linewidth=0.3, alpha=0.6)
+
+        plt.title(f"Peta Overlay Fitur OSM - {kec.split(',')[0]}", fontsize=14)
+        plt.legend(loc='upper left')
+        plt.axis("off")
+        plt.tight_layout()
+        plt.show()
+
+        df_grid = ekstrak_fitur_per_grid(grid, jalan, bangunan, hijau)
+        df_grid['kecamatan'] = kec.split(",")[0]
+        semua_grid.append(df_grid)
+        print(f"[SUKSES] {len(df_grid)} grid diproses")
+    except Exception as e:
+        print(f"[ERROR] Gagal memproses {kec}: {str(e)}")
+```
+![image](https://github.com/user-attachments/assets/1fdef2fa-fc31-453d-8880-ca7acecd1deb)
 
 ## 2. Library Yang Digunakan
+
 
 ### Berikut adalah library yang digunakan di dalam program
 
