@@ -216,39 +216,91 @@ for kec in KECAMATAN_TERPILIH:
     except Exception as e:
         print(f"[ERROR] Gagal memproses {kec}: {str(e)}")
 ```
-![image](https://github.com/user-attachments/assets/1fdef2fa-fc31-453d-8880-ca7acecd1deb)
+![image](https://github.com/user-attachments/assets/bc36191e-5302-4d01-8bb2-7c6bf12cbd80)
+![image](https://github.com/user-attachments/assets/64f09e2d-a86d-4c9d-be6b-329c895f3d12)
+![image](https://github.com/user-attachments/assets/5023a14f-ba57-4f8a-aa06-31285b4f7702)
 
-## 2. Library Yang Digunakan
 
-
-### Berikut adalah library yang digunakan di dalam program
+### Data Training
 
 ```python
-import time
-import sys
-import matplotlib.pyplot as plt
-
-
+df_semua_grid = pd.concat(semua_grid, ignore_index=True)
+df_semua_grid.dropna(
+    subset=['kepadatan_jalan', 'kepadatan_bangunan', 'persentase_hijau'],
+    inplace=True
+)
+print("\n[INFO] Data preprocessing selesai")
+print(f"Total grid: {len(df_semua_grid)}")
+print(f"Distribusi per kecamatan:")
+df_semua_grid['kecamatan'].value_counts()
 ```
+![image](https://github.com/user-attachments/assets/39ae62ac-d3f1-4997-8f67-b485d6f3dba7)
 
-## 3. Algoritma Rekursif
+## ANALISIS DISTRIBUSI FITUR NUMERIK
 
 ```python
-# Rekursif
-def cari_nama_rekursif(nama, karyawan, index):
-    if index >= len(karyawan):  # Basis kasus: jika indeks melebihi panjang daftar
-        return -1
-    if karyawan[index].nama == nama:  # Basis kasus: jika nama ditemukan
-        return hitung_gaji_manual(karyawan[index].jabatan, 1)
-    # Rekursi: panggil fungsi untuk elemen berikutnya
-    return cari_nama_rekursif(nama, karyawan, index + 1)
+fitur_numerik = ["kepadatan_jalan", "kepadatan_bangunan", "persentase_hijau"]
+fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
-def cari_nama_rekursif_wrapper(nama, karyawan):
-    return cari_nama_rekursif(nama, karyawan, 0)  # Wrapper untuk memulai dari indeks 0
+for i, fitur in enumerate(fitur_numerik):
+    sns.boxplot(y=fitur, data=df_semua_grid, ax=axes[i], color='skyblue')
+    axes[i].set_title(f'Distribusi {fitur}')
 
+plt.suptitle("Analisis Distribusi Fitur Numerik", fontsize=16)
+plt.tight_layout()
+plt.show()
+```
+![image](https://github.com/user-attachments/assets/68c1100b-5ca4-48ed-b4bd-9c7636541b0f)
+```python
+fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+sns.histplot(df_semua_grid['kepadatan_jalan'], kde=True, ax=axes[0], color='blue')
+sns.histplot(df_semua_grid['kepadatan_bangunan'], kde=True, ax=axes[1], color='green')
+sns.histplot(df_semua_grid['persentase_hijau'], kde=True, ax=axes[2], color='red')
+plt.suptitle("Distribusi Fitur Utama", fontsize=16)
+plt.tight_layout()
+plt.show()
+```
+![image](https://github.com/user-attachments/assets/c4dc4b86-9ced-4110-b7c1-a675015d4157)
+```python
+ALPHA, BETA, GAMMA = 0.3, 0.5, 0.2
+df_semua_grid["emisi_skor"] = (
+    ALPHA * df_semua_grid["kepadatan_jalan"]
+    + BETA * df_semua_grid["kepadatan_bangunan"]
+    - GAMMA * df_semua_grid["persentase_hijau"]
+)
+def label_emisi(row):
+    """Memberi label berdasarkan kriteria emisi"""
+    if row['persentase_hijau'] >= 30 and row['kepadatan_jalan'] <= 5 and row['kepadatan_bangunan'] <= 1000:
+        return 'Normal'
+    elif 15 <= row['persentase_hijau'] < 30 and 5 < row['kepadatan_jalan'] <= 10 and 1000 < row['kepadatan_bangunan'] <= 3000:
+        return 'Sedang'
+    else:
+        return 'Parah'
 
-```    
-## 4. Algoritma Iteratif
+df_semua_grid["label_emisi"] = df_semua_grid.apply(label_emisi, axis=1)
+display(df_semua_grid)
+```
+![image](https://github.com/user-attachments/assets/fd899c72-2ee5-40cd-8ffb-09500e9770ba)
+
+## KRITERIA EMISI KARBON
+```python
+df_semua_grid['label_emisi'] = df_semua_grid['label_emisi'].replace({
+    'Sedang': 'Tinggi',
+    'Parah': 'Tinggi'
+})
+kriteria_emisi = pd.DataFrame({
+    "Kategori": ["Normal (Rendah)", "Tinggi (Gabungan Sedang+Parah)"],
+    "% Hijau": [">= 30%", "< 30%"],
+    "Kepadatan Jalan": ["<= 5 km/km²", "> 5 km/km²"],
+    "Kepadatan Bangunan": ["<= 1000 bangunan/km²", "> 1000 bangunan/km²"],
+    "Keterangan": [
+        "Kota berkelanjutan, banyak RTH, lalu lintas rendah",
+        "Perlu perbaikan: Area hijau terbatas dan kepadatan tinggi"
+    ]
+})
+display(kriteria_emisi.style.set_caption("Kriteria Emisi Karbon"))
+```
+![image](https://github.com/user-attachments/assets/b0589ee1-7c71-4d70-a147-e07a3236be84)
 
 ```python
 # Iteratif
